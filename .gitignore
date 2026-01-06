@@ -1,0 +1,14 @@
+# Ignorar archivos de sistema
+.DS_Store
+Thumbs.db
+
+# Ignorar configuraciones de IntelliJ (IDE)
+.idea/
+*.iml
+*.iws
+out/
+
+# Ignorar compilados de Java/Maven
+target/
+*.class
+*.log
