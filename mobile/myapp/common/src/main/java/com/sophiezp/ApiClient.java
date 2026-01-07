@@ -5,6 +5,7 @@ import com.codename1.io.NetworkManager;
 import com.codename1.io.JSONParser;
 import java.io.ByteArrayInputStream;
 import java.io.InputStreamReader;
+import java.util.ArrayList;
 import java.util.Map;
 
 /**
@@ -67,9 +68,36 @@ public class ApiClient {
                     Map<String, Object> jsonResponse = parser.parseJSON(
                             new InputStreamReader(new ByteArrayInputStream(data), "UTF-8")
                     );
+
+                    // IMPORTANTE: Extraer el campo "data" de la respuesta del backend
+                    Object dataField = jsonResponse.get("data");
+
+                    // Debug: Imprimir estructura completa
+                    System.out.println("=== RESPUESTA DEL SERVIDOR ===");
+                    System.out.println("Response completo: " + jsonResponse);
+                    System.out.println("Campo 'data': " + dataField);
+                    System.out.println("==============================");
+
                     response.setSuccess(true);
-                    response.setData(jsonResponse);
                     response.setMessage(getMessageFromResponse(jsonResponse));
+
+                    if (dataField instanceof Map) {
+                        // Si "data" es un objeto Map, lo pasamos
+                        response.setData((Map<String, Object>) dataField);
+                    } else if (dataField instanceof ArrayList) {
+                        // Si "data" es un array, lo envolvemos en un Map con clave "items"
+                        Map<String, Object> wrappedData = new java.util.HashMap<>();
+                        wrappedData.put("items", dataField);
+                        response.setData(wrappedData);
+                    } else if (dataField != null) {
+                        // Si es cualquier otro tipo, lo envolvemos
+                        Map<String, Object> wrappedData = new java.util.HashMap<>();
+                        wrappedData.put("value", dataField);
+                        response.setData(wrappedData);
+                    } else {
+                        // Si no hay campo "data", usar toda la respuesta
+                        response.setData(jsonResponse);
+                    }
                 } else {
                     response.setSuccess(true);
                     response.setMessage("Operación exitosa");
@@ -98,7 +126,7 @@ public class ApiClient {
             }
         } catch (Exception e) {
             response.setSuccess(false);
-            response.setMessage("Error al procesar la respuesta del servidor");
+            response.setMessage("Error al procesar la respuesta del servidor: " + e.getMessage());
             response.setErrorCode("PARSE_ERROR");
             e.printStackTrace();
         }

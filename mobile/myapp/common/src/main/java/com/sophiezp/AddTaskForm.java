@@ -3,9 +3,7 @@ package com.sophiezp;
 import com.codename1.ui.*;
 import com.codename1.ui.layouts.BoxLayout;
 import com.codename1.ui.spinner.Picker;
-import com.codename1.io.ConnectionRequest;
-import com.codename1.io.NetworkManager;
-import com.codename1.l10n.SimpleDateFormat; // Importante para formatear fechas
+import com.codename1.l10n.SimpleDateFormat;
 import java.util.Date;
 
 public class AddTaskForm extends Form {
@@ -15,26 +13,21 @@ public class AddTaskForm extends Form {
 
         getToolbar().setBackCommand("", e -> previousScreen.showBack());
 
-        // 1. Campos de Texto
         TextField titleField = new TextField("", "Título (Ej: Parcial 1)", 20, TextField.ANY);
         TextField descField = new TextField("", "Descripción", 20, TextField.ANY);
 
-        // 2. Selector de Fecha y Hora (Picker)
         Picker datePicker = new Picker();
         datePicker.setType(Display.PICKER_TYPE_DATE_AND_TIME);
-        datePicker.setDate(new Date()); // Poner fecha actual por defecto
+        datePicker.setDate(new Date());
 
-        // 3. Selector de Tipo (ComboBox)
-        // Usamos los valores exactos que definimos en el ENUM de Java (Backend)
         ComboBox<String> typeCombo = new ComboBox<>("HOMEWORK", "EXAM", "EVENT");
 
-        // 4. Botón Guardar
         Button saveButton = new Button("Guardar Tarea");
         saveButton.getAllStyles().setMarginTop(30);
 
         saveButton.addActionListener(e -> {
-            String title = titleField.getText();
-            String desc = descField.getText();
+            String title = titleField.getText().trim();
+            String desc = descField.getText().trim();
             Date date = datePicker.getDate();
             String type = typeCombo.getSelectedItem();
 
@@ -57,37 +50,64 @@ public class AddTaskForm extends Form {
     }
 
     private void guardarTarea(Long subjectId, String title, String desc, Date date, String type, Form previous) {
-        // Formatear fecha a ISO-8601 que es lo que entiende Spring Boot
-        // Ej: "2025-11-20T08:00:00"
         SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss");
         String dateStr = sdf.format(date);
 
-        ConnectionRequest request = new ConnectionRequest();
-        request.setUrl("http://localhost:8080/api/tasks/subject/" + subjectId);
-        request.setPost(true);
-        request.setHttpMethod("POST");
-        request.setContentType("application/json");
+        String escapedTitle = escapeJson(title);
+        String escapedDesc = escapeJson(desc);
 
         String jsonBody = "{" +
-                "\"title\":\"" + title + "\"," +
-                "\"description\":\"" + desc + "\"," +
+                "\"title\":\"" + escapedTitle + "\"," +
+                "\"description\":\"" + escapedDesc + "\"," +
                 "\"dueDate\":\"" + dateStr + "\"," +
                 "\"type\":\"" + type + "\"" +
                 "}";
 
-        request.setRequestBody(jsonBody);
+        System.out.println("=== GUARDANDO TAREA ===");
+        System.out.println("JSON Body: " + jsonBody);
 
-        request.addResponseListener(e -> {
-            if(request.getResponseCode() == 200) {
-                Dialog.show("Éxito", "Tarea agendada", "OK", null);
-                // Volvemos a la pantalla anterior
-                // Nota: Idealmente deberíamos forzar una recarga, pero por ahora volvemos
+        ApiClient.post("/tasks/subject/" + subjectId, jsonBody, response -> {
+            System.out.println("Response Code: " + response.getResponseCode());
+            System.out.println("Response Success: " + response.isSuccess());
+
+            if(response.isSuccess() || response.getResponseCode() == 201) {
+                Dialog.show("Éxito", "Tarea agendada correctamente", "OK", null);
                 previous.showBack();
             } else {
-                Dialog.show("Error", "No se pudo guardar", "OK", null);
+                String errorMsg = response.getMessage();
+                if (errorMsg == null || errorMsg.isEmpty()) {
+                    errorMsg = "Error desconocido (código: " + response.getResponseCode() + ")";
+                }
+                Dialog.show("Error", errorMsg, "OK", null);
             }
         });
+    }
 
-        NetworkManager.getInstance().addToQueue(request);
+    private String escapeJson(String input) {
+        if (input == null) return "";
+        StringBuilder result = new StringBuilder();
+        for (int i = 0; i < input.length(); i++) {
+            char c = input.charAt(i);
+            switch (c) {
+                case '\\':
+                    result.append("\\\\");
+                    break;
+                case '"':
+                    result.append("\\\"");
+                    break;
+                case '\n':
+                    result.append("\\n");
+                    break;
+                case '\r':
+                    result.append("\\r");
+                    break;
+                case '\t':
+                    result.append("\\t");
+                    break;
+                default:
+                    result.append(c);
+            }
+        }
+        return result.toString();
     }
 }

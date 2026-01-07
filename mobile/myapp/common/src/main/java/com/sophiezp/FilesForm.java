@@ -15,6 +15,7 @@ public class FilesForm extends Form {
     private Long subjectId;
     private String subjectName;
     private Form previousScreen;
+    private Container filesContainer;
 
     public FilesForm(Form previous, Long subjectId, String subjectName) {
         super("Archivos - " + subjectName, BoxLayout.y());
@@ -26,11 +27,9 @@ public class FilesForm extends Form {
         getToolbar().setBackCommand("", e -> previousScreen.showBack());
 
         // Contenedor para la lista de archivos
-        Container filesContainer = new Container(BoxLayout.y());
+        filesContainer = new Container(BoxLayout.y());
+        filesContainer.setScrollableY(true);
         this.add(filesContainer);
-
-        // Cargar archivos desde el servidor
-        cargarArchivos(filesContainer);
 
         // FAB para cargar nuevo archivo
         FloatingActionButton fab = FloatingActionButton.createFAB(FontImage.MATERIAL_CLOUD_UPLOAD);
@@ -38,39 +37,95 @@ public class FilesForm extends Form {
         fab.addActionListener(e -> new UploadFileForm(this, subjectId, subjectName).show());
     }
 
-    private void cargarArchivos(Container container) {
+    @Override
+    protected void onShowCompleted() {
+        super.onShowCompleted();
+        cargarArchivos();
+    }
+
+    private void cargarArchivos() {
+        filesContainer.removeAll();
+        Label loadingLabel = new Label("Cargando archivos...");
+        loadingLabel.getAllStyles().setAlignment(Component.CENTER);
+        filesContainer.add(loadingLabel);
+        this.revalidate();
+
         ConnectionRequest request = new ConnectionRequest();
         request.setUrl("http://localhost:8080/api/files/subject/" + subjectId);
         request.setPost(false);
         request.setHttpMethod("GET");
 
         request.addResponseListener(e -> {
+            System.out.println("=== RESPONSE FILES ===");
+            System.out.println("Response Code: " + request.getResponseCode());
+
             if (request.getResponseCode() == 200) {
                 try {
                     byte[] data = request.getResponseData();
-                    JSONParser parser = new JSONParser();
-                    Map<String, Object> response = parser.parseJSON(new InputStreamReader(new ByteArrayInputStream(data), "UTF-8"));
+                    if (data != null && data.length > 0) {
+                        JSONParser parser = new JSONParser();
+                        Map<String, Object> response = parser.parseJSON(
+                                new InputStreamReader(new ByteArrayInputStream(data), "UTF-8")
+                        );
 
-                    ArrayList<Map<String, Object>> listaArchivos = (ArrayList<Map<String, Object>>) response.get("root");
+                        System.out.println("Response completa: " + response);
 
-                    container.removeAll();
+                        // ✅ CORREGIDO: Extraer correctamente el array de archivos
+                        Object dataField = response.get("data");
+                        final ArrayList<Map<String, Object>> listaArchivos;
 
-                    if (listaArchivos != null && !listaArchivos.isEmpty()) {
-                        for (Map<String, Object> archivoData : listaArchivos) {
-                            container.add(crearTarjetaArchivo(archivoData));
+                        if (dataField instanceof ArrayList) {
+                            listaArchivos = (ArrayList<Map<String, Object>>) dataField;
+                        } else if (response.containsKey("root")) {
+                            listaArchivos = (ArrayList<Map<String, Object>>) response.get("root");
+                        } else {
+                            listaArchivos = null;
                         }
+
+                        System.out.println("Lista archivos: " + listaArchivos);
+
+                        // Actualizar UI en el hilo principal
+                        Display.getInstance().callSerially(() -> {
+                            filesContainer.removeAll();
+
+                            if (listaArchivos != null && !listaArchivos.isEmpty()) {
+                                System.out.println("✅ Archivos encontrados: " + listaArchivos.size());
+                                for (Map<String, Object> archivoData : listaArchivos) {
+                                    System.out.println("Archivo: " + archivoData);
+                                    filesContainer.add(crearTarjetaArchivo(archivoData));
+                                }
+                            } else {
+                                Label emptyLabel = new Label("No hay archivos en esta materia");
+                                emptyLabel.getAllStyles().setAlignment(Component.CENTER);
+                                emptyLabel.getAllStyles().setFgColor(0x999999);
+                                emptyLabel.getAllStyles().setMarginTop(50);
+                                filesContainer.add(emptyLabel);
+                            }
+
+                            filesContainer.animateLayout(200);
+                        });
                     } else {
-                        container.add(new Label("No hay archivos en esta materia"));
+                        Display.getInstance().callSerially(() -> {
+                            filesContainer.removeAll();
+                            filesContainer.add(new Label("No hay datos disponibles"));
+                            this.revalidate();
+                        });
                     }
-
-                    this.revalidate();
-
                 } catch (Exception ex) {
                     ex.printStackTrace();
-                    container.add(new Label("Error cargando archivos"));
+                    System.out.println("❌ Error parseando archivos: " + ex.getMessage());
+                    Display.getInstance().callSerially(() -> {
+                        filesContainer.removeAll();
+                        filesContainer.add(new Label("Error al cargar archivos: " + ex.getMessage()));
+                        this.revalidate();
+                    });
                 }
             } else {
-                container.add(new Label("Error conexión: " + request.getResponseCode()));
+                Display.getInstance().callSerially(() -> {
+                    filesContainer.removeAll();
+                    filesContainer.add(new Label("Error de conexión: " + request.getResponseCode()));
+                    this.revalidate();
+                });
             }
         });
         NetworkManager.getInstance().addToQueue(request);
@@ -78,34 +133,80 @@ public class FilesForm extends Form {
 
     private Container crearTarjetaArchivo(Map<String, Object> archivoData) {
         Container tarjeta = new Container(BoxLayout.y());
-        tarjeta.getAllStyles().setPadding(5, 5, 5, 5);
-        tarjeta.getAllStyles().setMargin(5, 5, 5, 5);
-        tarjeta.getAllStyles().setBorder(Border.createRoundBorder(5, 5, 0xFF2196F3));
+        tarjeta.getAllStyles().setPadding(15, 15, 15, 15);
+        tarjeta.getAllStyles().setMargin(10, 10, 10, 10);
+        tarjeta.getAllStyles().setBorder(Border.createLineBorder(2, 0xFF2196F3));
+        tarjeta.getAllStyles().setBgColor(0xFFFFFF);
+        tarjeta.getAllStyles().setBgTransparency(255);
 
-        Label nombre = new Label((String) archivoData.get("fileName"));
-        nombre.getAllStyles().setFont(Font.createSystemFont(Font.FACE_SYSTEM, Font.STYLE_BOLD, Font.SIZE_MEDIUM));
+        // Nombre del archivo
+        String fileName = archivoData.get("fileName") != null ?
+                (String) archivoData.get("fileName") : "Sin nombre";
+        Label nombre = new Label("📄 " + fileName);
+        nombre.getAllStyles().setFont(Font.createSystemFont(
+                Font.FACE_SYSTEM, Font.STYLE_BOLD, Font.SIZE_MEDIUM
+        ));
+        nombre.getAllStyles().setFgColor(0x000000);
 
-        Long fileSize = ((Number) archivoData.get("fileSize")).longValue();
+        // Tamaño del archivo
+        Object fileSizeObj = archivoData.get("fileSize");
+        long fileSize = 0;
+        if (fileSizeObj instanceof Number) {
+            fileSize = ((Number) fileSizeObj).longValue();
+        }
         String fileSizeStr = formatearTamano(fileSize);
-        Label tamaño = new Label("Tamaño: " + fileSizeStr);
+        Label tamanoLabel = new Label("📊 Tamaño: " + fileSizeStr);
+        tamanoLabel.getAllStyles().setFgColor(0x666666);
 
-        String tipo = (String) archivoData.get("fileType");
-        Label tipo_label = new Label("Tipo: " + tipo);
+        // Tipo de archivo
+        String tipo = archivoData.get("fileType") != null ?
+                (String) archivoData.get("fileType") : "Desconocido";
+        Label tipoLabel = new Label("🔖 Tipo: " + tipo);
+        tipoLabel.getAllStyles().setFgColor(0x666666);
 
-        Label fecha = new Label("Subido: " + archivoData.get("uploadedAt"));
-        fecha.getAllStyles().setFgColor(0xFF888888);
-        fecha.getAllStyles().setFont(Font.createSystemFont(Font.FACE_SYSTEM, Font.STYLE_PLAIN, Font.SIZE_SMALL));
+        // Fecha de subida
+        String fecha = archivoData.get("uploadedAt") != null ?
+                (String) archivoData.get("uploadedAt") : "";
+        if (fecha.length() >= 10) {
+            fecha = fecha.substring(0, 10);
+        }
+        Label fechaLabel = new Label("📅 Subido: " + fecha);
+        fechaLabel.getAllStyles().setFgColor(0x888888);
+        fechaLabel.getAllStyles().setFont(Font.createSystemFont(
+                Font.FACE_SYSTEM, Font.STYLE_PLAIN, Font.SIZE_SMALL
+        ));
 
-        String descripcion = (String) archivoData.get("description");
-        if (descripcion != null && !descripcion.isEmpty()) {
-            Label desc_label = new Label("Descripción: " + descripcion);
-            tarjeta.add(desc_label);
+        // Descripción
+        String descripcion = archivoData.get("description") != null ?
+                (String) archivoData.get("description") : "";
+        if (!descripcion.isEmpty()) {
+            Label descLabel = new Label("📝 " + descripcion);
+            descLabel.getAllStyles().setFgColor(0x555555);
+            descLabel.getAllStyles().setMarginTop(5);
+            tarjeta.add(descLabel);
         }
 
-        Button descargarBtn = new Button("Descargar");
-        Button eliminarBtn = new Button("Eliminar");
+        // Botones de acción
+        Container buttonContainer = new Container(BoxLayout.x());
+        buttonContainer.getAllStyles().setMarginTop(10);
 
-        Long fileId = ((Number) archivoData.get("id")).longValue();
+        Button descargarBtn = new Button("⬇️ Descargar");
+        descargarBtn.getAllStyles().setBgColor(0x4CAF50);
+        descargarBtn.getAllStyles().setFgColor(0xFFFFFF);
+        descargarBtn.getAllStyles().setPadding(10, 10, 10, 10);
+
+        Button eliminarBtn = new Button("🗑️ Eliminar");
+        eliminarBtn.getAllStyles().setBgColor(0xF44336);
+        eliminarBtn.getAllStyles().setFgColor(0xFFFFFF);
+        eliminarBtn.getAllStyles().setPadding(10, 10, 10, 10);
+        eliminarBtn.getAllStyles().setMarginLeft(10);
+
+        Object fileIdObj = archivoData.get("id");
+        Long fileId = 0L;
+        if (fileIdObj != null) {
+            fileId = Float.valueOf(fileIdObj.toString()).longValue();
+        }
+        final Long finalFileId = fileId;
 
         descargarBtn.addActionListener(e -> {
             Dialog.show("Información", "La descarga se iniciará en el dispositivo", "OK", null);
@@ -118,18 +219,17 @@ public class FilesForm extends Form {
             Command[] cmds = {yes, no};
             Command result = Dialog.show("Confirmar", "¿Eliminar este archivo?", cmds);
             if (result == yes) {
-                eliminarArchivo(fileId);
+                eliminarArchivo(finalFileId);
             }
         });
 
-        tarjeta.add(nombre);
-        tarjeta.add(tamaño);
-        tarjeta.add(tipo_label);
-        tarjeta.add(fecha);
-
-        Container buttonContainer = new Container(BoxLayout.x());
         buttonContainer.add(descargarBtn);
         buttonContainer.add(eliminarBtn);
+
+        tarjeta.add(nombre);
+        tarjeta.add(tamanoLabel);
+        tarjeta.add(tipoLabel);
+        tarjeta.add(fechaLabel);
         tarjeta.add(buttonContainer);
 
         return tarjeta;
@@ -152,10 +252,14 @@ public class FilesForm extends Form {
 
         request.addResponseListener(e -> {
             if (request.getResponseCode() == 200) {
-                Dialog.show("Éxito", "Archivo eliminado", "OK", null);
-                this.show();
+                Display.getInstance().callSerially(() -> {
+                    Dialog.show("Éxito", "Archivo eliminado", "OK", null);
+                    cargarArchivos(); // Recargar la lista
+                });
             } else {
-                Dialog.show("Error", "No se pudo eliminar", "OK", null);
+                Display.getInstance().callSerially(() -> {
+                    Dialog.show("Error", "No se pudo eliminar", "OK", null);
+                });
             }
         });
 

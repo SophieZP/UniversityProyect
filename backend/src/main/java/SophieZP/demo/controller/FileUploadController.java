@@ -1,6 +1,5 @@
 package SophieZP.demo.controller;
 
-import SophieZP.demo.dto.ApiResponse;
 import SophieZP.demo.entity.FileUpload;
 import SophieZP.demo.entity.Subject;
 import SophieZP.demo.entity.User;
@@ -8,18 +7,22 @@ import SophieZP.demo.repository.FileUploadRepository;
 import SophieZP.demo.repository.SubjectRepository;
 import SophieZP.demo.repository.UserRepository;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-import java.util.List;
-import java.util.Optional;
+import org.springframework.web.multipart.MultipartFile;
 
-/**
- * Controlador para la gestión de carga de archivos.
- * Proporciona endpoints para subir, obtener y eliminar archivos.
- */
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
 @RestController
 @RequestMapping("/api/files")
+@CrossOrigin(origins = "*")
 public class FileUploadController {
 
     @Autowired
@@ -31,139 +34,207 @@ public class FileUploadController {
     @Autowired
     private UserRepository userRepository;
 
+    // Directorio donde se guardarán los archivos
+    private static final String UPLOAD_DIR = "uploads/";
+
     /**
-     * Subir un nuevo archivo.
+     * Subir un archivo para una materia
      * POST /api/files/subject/{subjectId}/user/{userId}
      */
     @PostMapping("/subject/{subjectId}/user/{userId}")
-    public ResponseEntity<ApiResponse<FileUpload>> uploadFile(@PathVariable Long subjectId, @PathVariable Long userId, @RequestBody FileUpload fileUpload) {
+    public ResponseEntity<Map<String, Object>> uploadFile(
+            @PathVariable Long subjectId,
+            @PathVariable Long userId,
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(value = "description", required = false) String description) {
+
+        Map<String, Object> response = new HashMap<>();
+
         try {
-            Optional<Subject> subject = subjectRepository.findById(subjectId);
-            Optional<User> user = userRepository.findById(userId);
-
-            if (!subject.isPresent()) {
-                return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                        .body(ApiResponse.error("Materia con ID " + subjectId + " no encontrada", "SUBJECT_NOT_FOUND"));
-            }
-            if (!user.isPresent()) {
-                return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                        .body(ApiResponse.error("Usuario con ID " + userId + " no encontrado", "USER_NOT_FOUND"));
+            // Validar que el archivo no esté vacío
+            if (file.isEmpty()) {
+                response.put("success", false);
+                response.put("message", "El archivo está vacío");
+                return ResponseEntity.badRequest().body(response);
             }
 
-            fileUpload.setSubject(subject.get());
-            fileUpload.setUser(user.get());
+            // Buscar materia y usuario
+            Subject subject = subjectRepository.findById(subjectId)
+                    .orElseThrow(() -> new RuntimeException("Materia no encontrada"));
+
+            User user = userRepository.findById(userId)
+                    .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
+
+            // Crear directorio si no existe
+            File uploadDir = new File(UPLOAD_DIR);
+            if (!uploadDir.exists()) {
+                uploadDir.mkdirs();
+            }
+
+            // Generar nombre único para el archivo
+            String originalFileName = file.getOriginalFilename();
+            String fileExtension = "";
+            if (originalFileName != null && originalFileName.contains(".")) {
+                fileExtension = originalFileName.substring(originalFileName.lastIndexOf("."));
+            }
+            String uniqueFileName = System.currentTimeMillis() + "_" + originalFileName;
+
+            // Guardar el archivo en el sistema de archivos
+            Path filePath = Paths.get(UPLOAD_DIR + uniqueFileName);
+            Files.write(filePath, file.getBytes());
+
+            // Crear registro en la base de datos
+            FileUpload fileUpload = new FileUpload();
+            fileUpload.setFileName(originalFileName);
+            fileUpload.setFileType(getFileExtension(originalFileName));
+            fileUpload.setFileSize(file.getSize());
+            fileUpload.setFilePath(filePath.toString());
+            fileUpload.setDescription(description);
+            fileUpload.setSubject(subject);
+            fileUpload.setUser(user);
+
             FileUpload savedFile = fileUploadRepository.save(fileUpload);
-            return ResponseEntity.status(HttpStatus.CREATED)
-                    .body(ApiResponse.success(savedFile, "Archivo guardado exitosamente"));
+
+            response.put("success", true);
+            response.put("message", "Archivo subido correctamente");
+            response.put("data", savedFile);
+
+            return ResponseEntity.status(201).body(response);
+
+        } catch (IOException e) {
+            e.printStackTrace();
+            response.put("success", false);
+            response.put("message", "Error al guardar el archivo: " + e.getMessage());
+            return ResponseEntity.status(500).body(response);
         } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(ApiResponse.error("Error al guardar el archivo: " + e.getMessage(), "UPLOAD_FILE_ERROR"));
+            e.printStackTrace();
+            response.put("success", false);
+            response.put("message", "Error: " + e.getMessage());
+            return ResponseEntity.status(500).body(response);
         }
     }
 
     /**
-     * Obtener todos los archivos de una materia.
+     * Obtener todos los archivos de una materia
      * GET /api/files/subject/{subjectId}
      */
     @GetMapping("/subject/{subjectId}")
-    public ResponseEntity<ApiResponse<List<FileUpload>>> getFilesBySubject(@PathVariable Long subjectId) {
-        try {
-            List<FileUpload> files = fileUploadRepository.findBySubjectId(subjectId);
-            return ResponseEntity.ok(ApiResponse.success(files));
-        } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(ApiResponse.error(e.getMessage(), "GET_FILES_ERROR"));
-        }
+    public ResponseEntity<Map<String, Object>> getFilesBySubject(@PathVariable Long subjectId) {
+        List<FileUpload> files = fileUploadRepository.findBySubjectId(subjectId);
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("success", true);
+        response.put("data", files);
+
+        return ResponseEntity.ok(response);
     }
 
     /**
-     * Obtener todos los archivos subidos por un usuario.
+     * Obtener todos los archivos de un usuario
      * GET /api/files/user/{userId}
      */
     @GetMapping("/user/{userId}")
-    public ResponseEntity<ApiResponse<List<FileUpload>>> getFilesByUser(@PathVariable Long userId) {
-        try {
-            List<FileUpload> files = fileUploadRepository.findByUserId(userId);
-            return ResponseEntity.ok(ApiResponse.success(files));
-        } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(ApiResponse.error(e.getMessage(), "GET_FILES_ERROR"));
-        }
+    public ResponseEntity<Map<String, Object>> getFilesByUser(@PathVariable Long userId) {
+        List<FileUpload> files = fileUploadRepository.findByUserId(userId);
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("success", true);
+        response.put("data", files);
+
+        return ResponseEntity.ok(response);
     }
 
     /**
-     * Obtener archivos de una materia subidos por un usuario.
-     * GET /api/files/subject/{subjectId}/user/{userId}
+     * Eliminar un archivo
+     * DELETE /api/files/{id}
      */
-    @GetMapping("/subject/{subjectId}/user/{userId}")
-    public ResponseEntity<ApiResponse<List<FileUpload>>> getFilesBySubjectAndUser(@PathVariable Long subjectId, @PathVariable Long userId) {
-        try {
-            List<FileUpload> files = fileUploadRepository.findBySubjectIdAndUserId(subjectId, userId);
-            return ResponseEntity.ok(ApiResponse.success(files));
-        } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(ApiResponse.error(e.getMessage(), "GET_FILES_ERROR"));
-        }
-    }
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Map<String, Object>> deleteFile(@PathVariable Long id) {
+        Map<String, Object> response = new HashMap<>();
 
-    /**
-     * Obtener un archivo específico por ID.
-     * GET /api/files/{fileId}
-     */
-    @GetMapping("/{fileId}")
-    public ResponseEntity<ApiResponse<FileUpload>> getFileById(@PathVariable Long fileId) {
         try {
-            Optional<FileUpload> file = fileUploadRepository.findById(fileId);
-            if (file.isPresent()) {
-                return ResponseEntity.ok(ApiResponse.success(file.get()));
+            FileUpload fileUpload = fileUploadRepository.findById(id)
+                    .orElseThrow(() -> new RuntimeException("Archivo no encontrado"));
+
+            // Eliminar archivo físico
+            try {
+                Path filePath = Paths.get(fileUpload.getFilePath());
+                Files.deleteIfExists(filePath);
+            } catch (IOException e) {
+                System.err.println("No se pudo eliminar el archivo físico: " + e.getMessage());
             }
-            return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(ApiResponse.error("Archivo no encontrado", "FILE_NOT_FOUND"));
+
+            // Eliminar registro de la base de datos
+            fileUploadRepository.deleteById(id);
+
+            response.put("success", true);
+            response.put("message", "Archivo eliminado correctamente");
+
+            return ResponseEntity.ok(response);
+
         } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(ApiResponse.error(e.getMessage(), "GET_FILE_ERROR"));
+            response.put("success", false);
+            response.put("message", "Error al eliminar archivo: " + e.getMessage());
+            return ResponseEntity.status(500).body(response);
         }
     }
 
     /**
-     * Actualizar metadatos del archivo.
-     * PUT /api/files/{fileId}
+     * Descargar un archivo
+     * GET /api/files/{id}/download
      */
-    @PutMapping("/{fileId}")
-    public ResponseEntity<ApiResponse<FileUpload>> updateFile(@PathVariable Long fileId, @RequestBody FileUpload fileDetails) {
+    @GetMapping("/{id}/download")
+    public ResponseEntity<?> downloadFile(@PathVariable Long id) {
         try {
-            Optional<FileUpload> file = fileUploadRepository.findById(fileId);
-            if (file.isPresent()) {
-                FileUpload existingFile = file.get();
-                existingFile.setDescription(fileDetails.getDescription());
-                FileUpload updatedFile = fileUploadRepository.save(existingFile);
-                return ResponseEntity.ok(ApiResponse.success(updatedFile, "Archivo actualizado"));
-            }
-            return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(ApiResponse.error("Archivo no encontrado", "FILE_NOT_FOUND"));
+            FileUpload fileUpload = fileUploadRepository.findById(id)
+                    .orElseThrow(() -> new RuntimeException("Archivo no encontrado"));
+
+            Path filePath = Paths.get(fileUpload.getFilePath());
+            byte[] fileContent = Files.readAllBytes(filePath);
+
+            return ResponseEntity.ok()
+                    .header("Content-Disposition", "attachment; filename=\"" + fileUpload.getFileName() + "\"")
+                    .header("Content-Type", "application/octet-stream")
+                    .body(fileContent);
+
         } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(ApiResponse.error(e.getMessage(), "UPDATE_FILE_ERROR"));
+            Map<String, Object> errorResponse = new HashMap<>();
+            errorResponse.put("success", false);
+            errorResponse.put("message", "Error al descargar archivo: " + e.getMessage());
+            return ResponseEntity.status(500).body(errorResponse);
         }
     }
 
     /**
-     * Eliminar un archivo.
-     * DELETE /api/files/{fileId}
+     * Obtener información de un archivo
+     * GET /api/files/{id}
      */
-    @DeleteMapping("/{fileId}")
-    public ResponseEntity<ApiResponse<Object>> deleteFile(@PathVariable Long fileId) {
-        try {
-            Optional<FileUpload> file = fileUploadRepository.findById(fileId);
-            if (file.isPresent()) {
-                fileUploadRepository.deleteById(fileId);
-                return ResponseEntity.ok(ApiResponse.success(null, "Archivo eliminado correctamente"));
-            }
-            return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(ApiResponse.error("Archivo no encontrado", "FILE_NOT_FOUND"));
-        } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(ApiResponse.error(e.getMessage(), "DELETE_FILE_ERROR"));
+    @GetMapping("/{id}")
+    public ResponseEntity<Map<String, Object>> getFileInfo(@PathVariable Long id) {
+        Map<String, Object> response = new HashMap<>();
+
+        FileUpload fileUpload = fileUploadRepository.findById(id).orElse(null);
+
+        if (fileUpload == null) {
+            response.put("success", false);
+            response.put("message", "Archivo no encontrado");
+            return ResponseEntity.status(404).body(response);
         }
+
+        response.put("success", true);
+        response.put("data", fileUpload);
+
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Método auxiliar para obtener la extensión del archivo
+     */
+    private String getFileExtension(String fileName) {
+        if (fileName == null || !fileName.contains(".")) {
+            return "UNKNOWN";
+        }
+        String extension = fileName.substring(fileName.lastIndexOf(".") + 1);
+        return extension.toUpperCase();
     }
 }

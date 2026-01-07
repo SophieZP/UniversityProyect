@@ -13,11 +13,13 @@ import java.util.Map;
 
 public class DashboardForm extends Form {
 
+    private Container materiasContainer;
+
     public DashboardForm() {
         super("Mis Materias", BoxLayout.y());
 
         // Set background color
-        this.getAllStyles().setBgColor(0xF5F5F5); // Light gray
+        this.getAllStyles().setBgColor(0xF5F5F5);
         this.getAllStyles().setBgTransparency(255);
 
         UserSession session = UserSession.getInstance();
@@ -29,48 +31,67 @@ public class DashboardForm extends Form {
 
         // --- BOTONES EN EL TOOLBAR ---
         Container toolbarContainer = new Container(BoxLayout.x());
-        
+
         Button notificationsBtn = new Button("🔔");
         notificationsBtn.addActionListener(e -> new NotificationsForm(this).show());
-        
+
         Button logoutBtn = new Button("Cerrar Sesión");
         logoutBtn.addActionListener(e -> {
-            // Confirmar antes de cerrar sesión
             Command yes = new Command("Sí, cerrar sesión");
             Command no = new Command("Cancelar");
             Command[] cmds = {yes, no};
-            
+
             Command result = Dialog.show("Confirmar", "¿Deseas cerrar sesión?", cmds);
             if (result == yes) {
                 UserSession.getInstance().closeSession();
                 new LoginScreen().show();
             }
         });
-        
+
         toolbarContainer.add(notificationsBtn);
         toolbarContainer.add(logoutBtn);
         this.add(toolbarContainer);
 
-        // Contenedor para la lista
-        Container materiasContainer = new Container(BoxLayout.y());
-        // IMPORTANTE: Quitamos el scroll del contenedor interno para que use el scroll del Formulario
-        // materiasContainer.setScrollableY(true);
+        // Contenedor para la lista de materias
+        materiasContainer = new Container(BoxLayout.y());
+        materiasContainer.setScrollableY(true);
         this.add(materiasContainer);
 
-        System.out.println("--- INICIANDO DASHBOARD PARA ID: " + session.getId() + " ---");
-
-        if (session.getId() != null) {
-            cargarMaterias(session.getId(), materiasContainer);
-        } else {
-            materiasContainer.add(new Label("Error: ID de usuario nulo"));
-        }
-
+        // FAB para agregar materia
         FloatingActionButton fab = FloatingActionButton.createFAB(FontImage.MATERIAL_ADD);
         fab.bindFabToContainer(this);
         fab.addActionListener(e -> new AddSubjectForm(this).show());
+
+        System.out.println("--- DASHBOARD CREADO PARA ID: " + session.getId() + " ---");
     }
 
-    private void cargarMaterias(Long userId, Container container) {
+    /**
+     * ✅ CRÍTICO: Este método se llama CADA VEZ que se muestra el formulario
+     * Así garantizamos que la lista de materias siempre esté actualizada
+     */
+    @Override
+    protected void onShowCompleted() {
+        super.onShowCompleted();
+
+        UserSession session = UserSession.getInstance();
+        if (session.getId() != null) {
+            System.out.println("--- RECARGANDO MATERIAS ---");
+            cargarMaterias(session.getId());
+        } else {
+            materiasContainer.removeAll();
+            materiasContainer.add(new Label("Error: ID de usuario nulo"));
+            this.revalidate();
+        }
+    }
+
+    private void cargarMaterias(Long userId) {
+        // Mostrar indicador de carga
+        materiasContainer.removeAll();
+        Label loadingLabel = new Label("Cargando materias...");
+        loadingLabel.getAllStyles().setAlignment(Component.CENTER);
+        materiasContainer.add(loadingLabel);
+        this.revalidate();
+
         ConnectionRequest request = new ConnectionRequest();
         request.setUrl("http://localhost:8080/api/subjects/user/" + userId);
         request.setPost(false);
@@ -83,47 +104,61 @@ public class DashboardForm extends Form {
                     JSONParser parser = new JSONParser();
                     Map<String, Object> response = parser.parseJSON(new InputStreamReader(new ByteArrayInputStream(data), "UTF-8"));
 
-                    // Codename One envuelve las listas en una llave "root"
-                    ArrayList<Map<String, Object>> listaMaterias = (ArrayList<Map<String, Object>>) response.get("root");
+                    // Extraer el array de materias
+                    Object dataField = response.get("data");
+                    ArrayList<Map<String, Object>> listaMaterias = null;
 
-                    container.removeAll();
-
-                    if (listaMaterias != null && !listaMaterias.isEmpty()) {
-                        System.out.println("Materias encontradas: " + listaMaterias.size());
-
-                        for (Map<String, Object> materiaData : listaMaterias) {
-                            // Imprimir nombre para verificar
-                            System.out.println("Renderizando materia: " + materiaData.get("name"));
-                            container.add(crearTarjetaMateria(materiaData));
-                        }
-                    } else {
-                        System.out.println("La lista de materias llegó vacía");
-                        container.add(new Label("No tienes materias inscritas"));
+                    if (dataField instanceof ArrayList) {
+                        listaMaterias = (ArrayList<Map<String, Object>>) dataField;
+                    } else if (response.containsKey("root")) {
+                        listaMaterias = (ArrayList<Map<String, Object>>) response.get("root");
                     }
 
-                    // Refrescar el diseño visual
+                    materiasContainer.removeAll();
+
+                    if (listaMaterias != null && !listaMaterias.isEmpty()) {
+                        System.out.println("✅ Materias encontradas: " + listaMaterias.size());
+
+                        for (Map<String, Object> materiaData : listaMaterias) {
+                            System.out.println("Renderizando materia: " + materiaData.get("name"));
+                            materiasContainer.add(crearTarjetaMateria(materiaData));
+                        }
+                    } else {
+                        System.out.println("⚠️ La lista de materias está vacía");
+                        Label emptyLabel = new Label("No tienes materias inscritas");
+                        emptyLabel.getAllStyles().setAlignment(Component.CENTER);
+                        emptyLabel.getAllStyles().setFgColor(0x999999);
+                        emptyLabel.getAllStyles().setMarginTop(50);
+                        materiasContainer.add(emptyLabel);
+                    }
+
                     this.revalidate();
 
                 } catch (Exception ex) {
                     ex.printStackTrace();
-                    container.add(new Label("Error leyendo datos"));
+                    materiasContainer.removeAll();
+                    Label errorLabel = new Label("Error al cargar materias: " + ex.getMessage());
+                    errorLabel.getAllStyles().setFgColor(0xFF0000);
+                    materiasContainer.add(errorLabel);
+                    this.revalidate();
                 }
             } else {
-                System.out.println("Error del servidor: " + request.getResponseCode());
-                container.add(new Label("Error conexión: " + request.getResponseCode()));
+                System.out.println("❌ Error del servidor: " + request.getResponseCode());
+                materiasContainer.removeAll();
+                Label errorLabel = new Label("Error de conexión: " + request.getResponseCode());
+                errorLabel.getAllStyles().setFgColor(0xFF0000);
+                materiasContainer.add(errorLabel);
+                this.revalidate();
             }
         });
         NetworkManager.getInstance().addToQueue(request);
     }
 
-    // Método auxiliar para diseñar la tarjeta de la materia
     private Container crearTarjetaMateria(Map<String, Object> data) {
-        // Validar nulos
         String nombre = data.get("name") != null ? (String) data.get("name") : "Sin Nombre";
         String profesor = data.get("teacherName") != null ? (String) data.get("teacherName") : "Sin Profesor";
         String colorCode = (String) data.get("colorCode");
 
-        // Parse color, default to white if invalid
         int bgColor = 0xFFFFFF;
         try {
             if (colorCode != null && colorCode.startsWith("#")) {
@@ -142,14 +177,9 @@ public class DashboardForm extends Form {
         Style s = card.getAllStyles();
         s.setBorder(Border.createLineBorder(2, 0x333333));
 
-        // --- CAMBIO CLAVE AQUÍ ---
-        // En lugar de Label, usamos Button.
         Button btnNombre = new Button(nombre);
-
-        // Le quitamos el estilo de botón para que parezca un Label normal
-        // (Sin bordes, sin fondo gris, alineado a la izquierda)
         btnNombre.setUIID("Label");
-        btnNombre.getAllStyles().setFgColor(0x000000); // Texto negro
+        btnNombre.getAllStyles().setFgColor(0x000000);
         btnNombre.getAllStyles().setAlignment(Component.LEFT);
 
         Label lblProfe = new Label(profesor);
@@ -159,10 +189,8 @@ public class DashboardForm extends Form {
         card.add(btnNombre);
         card.add(lblProfe);
 
-        // leadComponent transfiere el clic de la tarjeta al botón
         card.setLeadComponent(btnNombre);
 
-        // AHORA SÍ funcionará el ActionListener porque es un Botón
         btnNombre.addActionListener(evt -> {
             System.out.println("Entrando a materia: " + nombre);
 
